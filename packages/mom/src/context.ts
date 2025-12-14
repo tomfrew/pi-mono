@@ -408,12 +408,18 @@ export interface MomRetrySettings {
 	baseDelayMs: number;
 }
 
+export interface ThinkingConfig {
+	enabled: boolean;
+	budgetTokens?: number;
+}
+
 export interface MomSettings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high";
 	compaction?: Partial<MomCompactionSettings>;
 	retry?: Partial<MomRetrySettings>;
+	thinking?: ThinkingConfig;
 }
 
 const DEFAULT_COMPACTION: MomCompactionSettings = {
@@ -426,6 +432,11 @@ const DEFAULT_RETRY: MomRetrySettings = {
 	enabled: true,
 	maxRetries: 3,
 	baseDelayMs: 2000,
+};
+
+const DEFAULT_THINKING: ThinkingConfig = {
+	enabled: false,
+	budgetTokens: undefined,
 };
 
 /**
@@ -519,6 +530,68 @@ export class MomSettingsManager {
 	setDefaultThinkingLevel(level: string): void {
 		this.settings.defaultThinkingLevel = level as MomSettings["defaultThinkingLevel"];
 		this.save();
+	}
+
+	/**
+	 * Get thinking config, with optional per-channel override.
+	 * Checks channel settings first, falls back to workspace settings.
+	 */
+	getThinkingConfig(channelId?: string): ThinkingConfig {
+		// Check for channel-specific override
+		if (channelId) {
+			const channelSettingsPath = join(dirname(this.settingsPath), channelId, "settings.json");
+			if (existsSync(channelSettingsPath)) {
+				try {
+					const content = readFileSync(channelSettingsPath, "utf-8");
+					const channelSettings = JSON.parse(content) as MomSettings;
+					if (channelSettings.thinking) {
+						return { ...DEFAULT_THINKING, ...channelSettings.thinking };
+					}
+				} catch {
+					// Fall through to workspace settings
+				}
+			}
+		}
+
+		// Use workspace settings
+		return { ...DEFAULT_THINKING, ...this.settings.thinking };
+	}
+
+	/**
+	 * Set thinking config, optionally per-channel.
+	 * If channelId provided, saves to channel settings, otherwise workspace settings.
+	 */
+	setThinkingConfig(config: ThinkingConfig, channelId?: string): void {
+		if (channelId) {
+			// Save to channel-specific settings
+			const channelDir = join(dirname(this.settingsPath), channelId);
+			const channelSettingsPath = join(channelDir, "settings.json");
+
+			let channelSettings: MomSettings = {};
+			if (existsSync(channelSettingsPath)) {
+				try {
+					const content = readFileSync(channelSettingsPath, "utf-8");
+					channelSettings = JSON.parse(content);
+				} catch {
+					// Start fresh
+				}
+			}
+
+			channelSettings.thinking = config;
+
+			try {
+				if (!existsSync(channelDir)) {
+					mkdirSync(channelDir, { recursive: true });
+				}
+				writeFileSync(channelSettingsPath, JSON.stringify(channelSettings, null, 2), "utf-8");
+			} catch (error) {
+				console.error(`Warning: Could not save channel settings: ${error}`);
+			}
+		} else {
+			// Save to workspace settings
+			this.settings.thinking = config;
+			this.save();
+		}
 	}
 
 	// Compatibility methods for AgentSession
